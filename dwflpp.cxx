@@ -1193,8 +1193,61 @@ dwflpp::iterate_over_globals<void>(Dwarf_Die *cu_die,
 }
 
 template<> int
-dwflpp::iterate_over_types<void>(Dwarf_Die *top_die,
-                                 bool has_inner_types,
+dwflpp::iterate_over_enumerations<void>(Dwarf_Die *top_die,
+                                 int (* callback)(Dwarf_Die*, Dwarf_Die*, void*),
+                                 void *data)
+{
+  int rc = DWARF_CB_OK;
+  Dwarf_Die die;
+
+  assert (top_die);
+  assert (dwarf_tag(top_die) == DW_TAG_compile_unit);
+
+  if (dwarf_child(top_die, &die) != 0)
+    return rc;
+
+  do
+    switch (dwarf_tag(&die))
+      {
+      case DW_TAG_enumeration_type:
+	{
+	  /* Walk the enum type's enumeration members */
+	  Dwarf_die enum_die;
+  	  if (dwarf_child(die, &enum_die) == 0) {
+	    do {
+	      if (dwarf_tag(&enum_die) == DW_TAG_enumerator)
+		{
+		  /* Let the cb inspect the enum */
+		  rc = (*callback)(&enumdie, &die, data);
+	        }
+	      else if (sess.verbose > 3)
+		{
+		  clog << _F("unexpected child of DWARF enumeration_type %s: got %d, expected %d (DW_TAG_enumerator)", dwarf_diename(&die), dwarf_tag(&enum_die), DW_TAG_enumerator) << endl;
+		}
+	    } while (enum_rc == DWARF_CB_OK && dwarf_siblingof(&enumdie, &enumdie) == 0);
+	  }
+          break;
+	}
+
+      case DW_TAG_imported_unit:
+	{
+	  // Follow the imported_unit and iterate over its contents
+	  // (either a partial_unit or a full compile_unit), all its
+	  // children should be treated as if they appear in this place.
+	  Dwarf_die import;
+	  if (dwarf_attr_die(&die, DW_AT_import, &import))
+	    rc = iterate_over_enumerations(&import,
+				    callback, data);
+	  break;
+	}
+      }
+  while (rc == DWARF_CB_OK && dwarf_siblingof(&die, &die) == 0);
+
+  return rc;
+}
+
+template<> int
+dwflpp::iterate_over_enumerators<void>(Dwarf_Die *top_die,
                                  const string& prefix,
                                  int (* callback)(Dwarf_Die*,
                                                   bool,
@@ -1230,8 +1283,7 @@ dwflpp::iterate_over_types<void>(Dwarf_Die *top_die,
 	// (either a partial_unit or a full compile_unit), all its
 	// children should be treated as if they appear in this place.
 	if (dwarf_attr_die(&die, DW_AT_import, &import))
-	  rc = iterate_over_types(&import, has_inner_types, prefix,
-				  callback, data);
+	  rc = iterate_over_enumerators(&import, prefix, callback, data);
 	break;
       }
   while (rc == DWARF_CB_OK && dwarf_siblingof(&die, &die) == 0);
@@ -3558,6 +3610,10 @@ dwflpp::translate_components(location_context *ctx,
 
         case DW_TAG_enumeration_type:
         case DW_TAG_base_type:
+	  /*
+	   * Can't deref base types, and C enums are accessed by their
+	   * DW_TAG_enumerator not their DW_TAG_enumeration_type
+	   */
           throw SEMANTIC_ERROR (_F("invalid access '%s' vs. %s", lex_cast(c).c_str(),
                                    dwarf_type_name(typedie).c_str()), c.tok);
           break;

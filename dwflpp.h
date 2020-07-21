@@ -435,6 +435,15 @@ struct dwflpp
                                         (void*)data);
     }
 
+  template<typename T>
+  static int iterate_over_enumerations(Dwarf_Die *cu_die,
+                                 int (* callback)(Dwarf_Die*, Dwarf_Die*, void*),
+                                 void *data) {
+      return iterate_over_enumerations<void>(cu_die,
+                                        (int (*)(Dwarf_Die*, Dwarf_Die*, void*)) callback,
+					(void*)data);
+  }
+
   GElf_Shdr * get_section(std::string section_name, GElf_Shdr *shdr_mem,
                           Elf **elf_ret=NULL);
 
@@ -743,6 +752,12 @@ dwflpp::iterate_over_types<void>(Dwarf_Die *top_die,
                                                   const std::string&,
                                                   void*),
                                  void *data);
+
+template<> int
+dwflpp::iterate_over_enumerations<void>(Dwarf_Die *top_die,
+                                 int (* callback)(Dwarf_Die*, Dwarf_Die*, void*),
+                                 void *data);
+
 template<> int
 dwflpp::iterate_over_notes<void>(void *object, void (*callback)(void*,
                                                                 const std::string&,

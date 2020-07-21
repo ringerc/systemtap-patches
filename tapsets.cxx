@@ -2854,6 +2854,7 @@ struct dwarf_var_expanding_visitor: public var_expanding_visitor
   void visit_target_symbol (target_symbol* e);
   void visit_atvar_op (atvar_op* e);
   void visit_cast_op (cast_op* e);
+  void visit_atenum_op (atenum_op* e);
   void visit_entry_op (entry_op* e);
   void visit_perf_op (perf_op* e);
 
@@ -3074,6 +3075,8 @@ public:
   { context_op_p = true; traversing_visitor::visit_defined_op(e); }
   void visit_atvar_op (atvar_op* e)
   { context_op_p = true; traversing_visitor::visit_atvar_op(e); }
+  void visit_atenum_op (atenum_op* e)
+  { context_op_p = true; traversing_visitor::visit_atenum_op(e); }
   void visit_cast_op (cast_op* e) // if module is specified, not a context_op_p
   { if (e->module == "") context_op_p = true; traversing_visitor::visit_cast_op(e); }
   void visit_autocast_op (autocast_op* e) // XXX do these show up early?
@@ -4702,6 +4705,16 @@ dwarf_var_expanding_visitor::visit_cast_op (cast_op *e)
   var_expanding_visitor::visit_cast_op(e);
 }
 
+void
+dwarf_var_expanding_visitor::visit_atenum_op (atenum_op *e)
+{
+  // Fill in our current module context if needed
+  if (e->module.empty())
+    e->module = q.dw.module_name;
+
+  var_expanding_visitor::visit_atenum_op(e);
+}
+
 
 void
 dwarf_var_expanding_visitor::visit_entry_op (entry_op *e)
@@ -4972,6 +4985,7 @@ void dwarf_cast_expanding_visitor::filter_special_modules(string& module)
 }
 
 
+/* Guts of @cast(...) implementation */
 void dwarf_cast_expanding_visitor::visit_cast_op (cast_op* e)
 {
   bool lvalue = is_active_lvalue(e);
@@ -5112,7 +5126,7 @@ exp_type_dwarf::expand(autocast_op* e, bool lvalue)
     }
 }
 
-
+/* Guts of @var(...) implementation */
 struct dwarf_atvar_expanding_visitor: public var_expanding_visitor
 {
   dwarf_builder& db;
@@ -5280,6 +5294,169 @@ dwarf_atvar_expanding_visitor::visit_atvar_op (atvar_op* e)
       string mn = module;
       string cun = e->cu_name;
       semantic_error  er(ERR_SRC, _F("unable to find global '%s' in %s%s%s",
+                                     esn.c_str(), mn.c_str(),
+                                     cun.empty() ? "" : _(", in "),
+                                     cun.c_str()));
+      if (sess.verbose > 3)
+        clog << "chaining to " << *e->tok << endl
+             << sess.build_error_msg(er) << endl;
+      e->chain (er);
+    }
+
+  provide(e);
+}
+
+/* Guts of @enum(...) implementation */
+struct dwarf_atenum_expanding_visitor: public var_expanding_visitor
+{
+  dwarf_builder& db;
+
+  dwarf_atenum_expanding_visitor(systemtap_session& s, dwarf_builder& db):
+    var_expanding_visitor(s), db(db) {}
+  void visit_atenum_op (atenum_op* e);
+};
+
+
+struct dwarf_atenum_query: public base_query
+{
+  atenum_op& e;
+  functioncall*& result;
+
+  dwarf_atenum_query(dwflpp& dw, const string& module, atenum_op& e,
+                    functioncall*& result):
+    base_query(dw, module), e(e), result(result),
+    {}
+
+  void handle_query_module ();
+  void query_library (const char *) {}
+  void query_plt (const char *, size_t) {}
+  /* Search each type in a CU for the target enumeration during @enum expansion */
+  static int atenum_query_cu_cb(Dwarf_Die* cudie, dwarf_atenum_query *query) {
+    dw.iterate_over_enumerations(cudie, atenum_query_enumeration_cb, query);
+  }
+  static int atenum_query_enumeration_cb(Dwarf_Die* enumtype_die, Dwarf_Die *enumeration_die, dwarf_atenum_query *query) {
+    query->atenum_query_enumeration(enumtype_die, enumeration_die);
+  }
+private:
+  int atenum_query_enumeration(Dwarf_Die* enumtype_die, Dwarf_Die *enumeration_die, dwarf_atenum_query *query);
+};
+
+/*
+ * Check if the matched enumeration is the one we want
+ */
+int dwarf_atenum_query::atenum_query_enumeration(Dwarf_Die* enumtype_die,
+						 Dwarf_Die *enumeration_die,
+						 dwarf_atenum_query *query)
+{
+  if (e.enumeration_name == dwarf_diename(enumeration_die))
+    {
+      /* The enum type itself determines signedness */
+      Dwarf_Word encoding = (Dwarf_Word) -1;
+      Dwarf_Attribute encoding_attr;
+      if (!dwarf_attr_integrate (enumtype_die, DW_AT_encoding, &encoding_attr)
+	  || dwarf_formudata(&encoding_attr, &encoding) != 0)
+	throw SEMANTIC_ERROR(_("@enum(%s) data-type detection failed: cannot get encoding attribute: %s",
+			       e->eumeration_name.c_str(), encoding),
+			     e->tok);
+
+      if (!(encoding == DW_ATE_signed || encoding == DW_ATE_signed_char
+	     || encoding == DW_ATE_unsigned || encoding == DW_ATE_unsigned_char))
+	throw SEMANTIC_ERROR(_("@enum(%s) data-type detection failed: unexpected encoding-type %d",
+			       e->eumeration_name.c_str(), encoding),
+			     e->tok);
+
+      bool issigned = encoding == DW_ATE_signed || encoding == DW_ATE_signed_char;
+
+      /* Get the enum value */
+      Dwarf_Word enumval = (Dwarf_Word) -1;
+      Dwarf_Attribute constattr;
+      if (!dwarf_attr_integrate(enumeration_die, DW_TAG_const_value, &constattr)
+	  || (issigned && dwarf_formsdata(&constattr, &enumval) != 0)
+	  || (!issigned && dwarf_formudata(&constattr, &enumval) != 0))
+	throw SEMANTIC_ERROR(_("@enum(%s) constant-expansion failed: %s",
+			       e->eumeration_name.c_str(), dwarf_errmsg(-1)),
+			     e->tok);
+
+      /* Sub in a literal. TODO: signedness? */
+      expression *ret = new literal_number(enumval);
+      provide(ret);
+
+      return DWARF_CB_ABORT;
+    }
+  else
+    return DWARF_CB_OK;
+}
+
+/* Search each CU in a module for the target enumeration during @enum expansion */
+void
+dwarf_atenum_query::handle_query_module ()
+{
+  if (result)
+    return;
+
+  if (startswith(tns, "enum "))
+    throw SEMANTIC_ERROR(_("@enum(...) takes an enumeration as a value, not an enum type-name"), e->tok);
+
+  dw.iterate_over_cus(atenum_query_cu, this, null, true);
+}
+
+
+// TODO: share with dwarf_atvar_expanding_visitor from which this was mostly copied
+// Expand @enum into the constant
+void
+dwarf_atenum_expanding_visitor::visit_atenum_op (atenum_op* e)
+{
+  if (is_active_lvalue(e))
+    throw SEMANTIC_ERROR(_("cannot use @enum as an lvalue"), e->tok);
+
+  functioncall* result = NULL;
+
+  // split the module string by ':' for alternatives
+  vector<string> modules;
+  tokenize(e->module, modules, ":");
+  bool userspace_p = false;
+  for (unsigned i = 0; !result && i < modules.size(); ++i)
+    {
+      string& module = modules[i];
+
+      dwflpp* dw;
+      try
+        {
+          userspace_p = is_user_module(module);
+          if (!userspace_p)
+            {
+              // kernel or kernel module target
+              dw = db.get_kern_dw(sess, module);
+            }
+          else
+            {
+              module = find_executable(module, "", sess.sysenv);
+              dw = db.get_user_dw(sess, module);
+            }
+        }
+      catch (const semantic_error& er)
+        {
+          /* ignore and go to the next module */
+          continue;
+        }
+
+      // Search each target module with the iterate_over_types callback
+      dwarf_atenum_query q (*dw, module, *e, userspace_p, false, result, tick);
+      dw->iterate_over_modules<base_query>(&query_module, &q);
+
+      if (result)
+        {
+          sess.unwindsym_modules.insert(module);
+          result->visit(this);
+          return;
+        }
+
+      /* Unable to find the variable in the current module, so we chain
+       * an error in atenum_op */
+      string esn = e->sym_name();
+      string mn = module;
+      string cun = e->cu_name;
+      semantic_error  er(ERR_SRC, _F("unable to find enumeration '%s' in %s%s%s",
                                      esn.c_str(), mn.c_str(),
                                      cun.empty() ? "" : _(", in "),
                                      cun.c_str()));
@@ -6473,6 +6650,7 @@ struct sdt_uprobe_var_expanding_visitor: public var_expanding_visitor
   void visit_target_symbol_context (target_symbol* e);
   void visit_atvar_op (atvar_op* e);
   void visit_cast_op (cast_op* e);
+  void visit_atenum_op (atenum_op* e);
 };
 
 void
@@ -7457,6 +7635,12 @@ sdt_uprobe_var_expanding_visitor::visit_cast_op (cast_op* e)
   var_expanding_visitor::visit_cast_op(e);
 }
 
+void
+sdt_uprobe_var_expanding_visitor::visit_atenum_op (atenum_op* e)
+{
+    throw SEMANTIC_ERROR(_F("@enum(...) resolution is not available in uprobes. Try a DWARF probe.",
+			    e->tok);
+}
 
 void
 plt_expanding_visitor::visit_target_symbol (target_symbol *e)
@@ -11281,6 +11465,7 @@ is_signed_type(Dwarf_Die *die)
   switch (dwarf_tag(die))
     {
     case DW_TAG_base_type:
+    case DW_TAG_enumeration_type:
       {
         Dwarf_Attribute attr;
         Dwarf_Word encoding = (Dwarf_Word) -1;

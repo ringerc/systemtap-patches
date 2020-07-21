@@ -3551,6 +3551,11 @@ struct assignment_symbol_fetcher
     sym = NULL;
   }
 
+  void visit_atenum_op (atenum_op*)
+  {
+    sym = NULL;
+  }
+
   void visit_cast_op (cast_op*)
   {
     sym = NULL;
@@ -4030,6 +4035,7 @@ struct void_statement_reducer: public update_visitor
   void visit_print_format (print_format* e);
   void visit_target_symbol (target_symbol* e);
   void visit_atvar_op (atvar_op* e);
+  void visit_atenum_op (atenum_op* e);
   void visit_cast_op (cast_op* e);
   void visit_autocast_op (autocast_op* e);
   void visit_defined_op (defined_op* e);
@@ -4372,6 +4378,14 @@ void_statement_reducer::reduce_target_symbol (target_symbol* e,
 
 void
 void_statement_reducer::visit_atvar_op (atvar_op* e)
+{
+  if (session.verbose>2)
+    clog << _("Eliding unused target symbol ") << *e->tok << endl;
+  reduce_target_symbol (e);
+}
+
+void
+void_statement_reducer::visit_atenum_op (atenum_op* e)
 {
   if (session.verbose>2)
     clog << _("Eliding unused target symbol ") << *e->tok << endl;
@@ -5905,6 +5919,7 @@ struct initial_typeresolution_info : public typeresolution_info
   // and not all substitutions are done, replace the functions that throw errors.
   void visit_target_symbol (target_symbol*) {}
   void visit_atvar_op (atvar_op*) {}
+  void visit_atenum_op (atenum_op*) {}
   void visit_defined_op (defined_op*) {}
   void visit_entry_op (entry_op*) {}
   void visit_cast_op (cast_op*) {}
@@ -6729,6 +6744,16 @@ typeresolution_info::visit_cast_op (cast_op* e)
                                            e->module.to_string().c_str()), e->tok));
 }
 
+void
+typeresolution_info::visit_atenum_op (atenum_op* e)
+{
+  if (e->saved_conversion_error)
+    session.print_error (* (e->saved_conversion_error));
+  else
+    session.print_error (SEMANTIC_ERROR(_F("enumeration definition '%s' not found in '%s'",
+                                           e->enumeration_name.to_string().c_str(),
+                                           e->module.to_string().c_str()), e->tok));
+}
 
 void
 typeresolution_info::visit_autocast_op (autocast_op* e)

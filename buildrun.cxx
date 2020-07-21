@@ -31,7 +31,7 @@ extern "C" {
 #include <sys/resource.h>
 }
 
-// A bit of obfuscation for Gentoo's sake.
+// A bit of obfuscation for Gentoo's sake so it cannot hide -Werror.
 // We *need* -Werror for stapconf to work correctly.
 // https://bugs.gentoo.org/show_bug.cgi?id=522908
 #define WERROR ("-W" "error")

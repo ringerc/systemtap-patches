@@ -564,6 +564,15 @@ void atvar_op::print (ostream& o) const
     o << components[i];
 }
 
+void atenum_op::print (ostream& o) const
+{
+  o << name << '(' << lex_cast_qstring(enumeration_name);
+  if (module.length() > 0)
+    o << ", " << lex_cast_qstring (module);
+  o << ')';
+  for (unsigned i = 0; i < components.size(); ++i)
+    o << components[i];
+}
 
 void cast_op::print (ostream& o) const
 {
@@ -1798,6 +1807,12 @@ atvar_op::visit (visitor* u)
   u->visit_atvar_op(this);
 }
 
+void
+atenum_op::visit (visitor* u)
+{
+  u->visit_atenum_op(this);
+}
+
 
 void
 defined_op::visit (visitor* u)
@@ -2181,6 +2196,12 @@ traversing_visitor::visit_atvar_op (atvar_op* e)
 }
 
 void
+traversing_visitor::visit_atenum_op (atenum_op* e)
+{
+  e->visit_components (this);
+}
+
+void
 traversing_visitor::visit_defined_op (defined_op* e)
 {
   e->operand->visit (this);
@@ -2439,6 +2460,13 @@ void
 expression_visitor::visit_atvar_op (atvar_op* e)
 {
   traversing_visitor::visit_atvar_op (e);
+  visit_expression (e);
+}
+
+void
+expression_visitor::visit_atenum_op (atenum_op* e)
+{
+  traversing_visitor::visit_atenum_op (e);
   visit_expression (e);
 }
 
@@ -2717,6 +2745,14 @@ varuse_collecting_visitor::visit_atvar_op (atvar_op *e)
   functioncall_traversing_visitor::visit_atvar_op (e);
 }
 
+void
+varuse_collecting_visitor::visit_atenum_op (atenum_op *e)
+{
+  if (is_active_lvalue (e))
+    throw SEMANTIC_ERROR (_("@enum cannot be used as an lvalue"), e->tok);
+
+  functioncall_traversing_visitor::visit_atenum_op (e);
+}
 
 void
 varuse_collecting_visitor::visit_cast_op (cast_op *e)
@@ -3245,6 +3281,12 @@ throwing_visitor::visit_atvar_op (atvar_op* e)
 }
 
 void
+throwing_visitor::visit_atenum_op (atenum_op* e)
+{
+  throwone (e->tok);
+}
+
+void
 throwing_visitor::visit_cast_op (cast_op* e)
 {
   throwone (e->tok);
@@ -3562,10 +3604,18 @@ update_visitor::visit_target_symbol (target_symbol* e)
   provide (e);
 }
 
+/* XXX does this make sense ? */
 void
 update_visitor::visit_cast_op (cast_op* e)
 {
   replace (e->operand);
+  e->visit_components (this);
+  provide (e);
+}
+
+void
+update_visitor::visit_atenum_op (atenum_op* e)
+{
   e->visit_components (this);
   provide (e);
 }
@@ -3877,6 +3927,12 @@ void
 deep_copy_visitor::visit_atvar_op (atvar_op* e)
 {
   update_visitor::visit_atvar_op(new atvar_op(*e));
+}
+
+void
+deep_copy_visitor::visit_atenum_op (atenum_op* e)
+{
+  update_visitor::visit_atenum_op(new atenum_op(*e));
 }
 
 void

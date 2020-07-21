@@ -237,6 +237,7 @@ struct c_unparser: public unparser, public visitor
   void visit_cast_op (cast_op* e);
   void visit_autocast_op (autocast_op* e);
   void visit_atvar_op (atvar_op* e);
+  void visit_atenum_op (atenum_op* e);
   void visit_defined_op (defined_op* e);
   void visit_entry_op (entry_op* e);
   void visit_perf_op (perf_op* e);
@@ -5347,6 +5348,11 @@ c_unparser::visit_atvar_op (atvar_op* e)
   throw SEMANTIC_ERROR(_("cannot translate general @var expression"), e->tok);
 }
 
+void
+c_unparser::visit_atenum_op (atenum_op* e)
+{
+  throw SEMANTIC_ERROR(_("cannot translate general @enum expression"), e->tok);
+}
 
 void
 c_unparser::visit_cast_op (cast_op* e)

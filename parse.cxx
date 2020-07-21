@@ -204,6 +204,7 @@ private: // nonterminals
   target_symbol *parse_target_symbol ();
   cast_op *parse_cast_op ();
   atvar_op *parse_atvar_op ();
+  atenum_op *parse_atenum_op ();
   expression* parse_entry_op (const token* t);
   expression* parse_defined_op (const token* t);
   expression* parse_const_op (const token* t);
@@ -1478,6 +1479,10 @@ lexer::lexer (istream& input, const string& in, systemtap_session& s, bool cc):
           atwords.insert("kderef");
           atwords.insert("uderef");
         }
+      if (has_version("4.4"))
+        {
+	  atwords.insert("enum");
+	}
     }
 }
 
@@ -3712,6 +3717,8 @@ parser::parse_dwarf_value ()
   else if (addressof && !input.has_version("2.6"))
     // '&' on old version only allowed specific target_symbol types
     throw PARSE_ERROR (_("expected @cast, @var or $var"));
+  else if (input.has_version("4.4") && tok_is(t, tok_operator, "@enum"))
+    expr = tsym = parse_atenum_op ();
   else
     {
       // Otherwise just get a plain value of any sort.
@@ -3834,7 +3841,7 @@ parser::parse_indexable ()
 
 
 // var, indexable[index], func(parms), printf("...", ...),
-// @defined, @entry, @stat_op(stat)
+// @defined, @entry, @stat_op(stat), @enum
 expression* parser::parse_symbol ()
 {
   hist_op *hop = NULL;
@@ -4175,6 +4182,34 @@ atvar_op* parser::parse_atvar_op ()
   throw PARSE_ERROR (_("expected @var"));
 }
 
+// Parse a @enum
+atenum_op* parser::parse_atenum_op ()
+{
+  const token* t = next ();
+  if (t->type == tok_operator && t->content == "@enum")
+    {
+      atenum_op *eop = new atenum_op;
+      eop->tok = t;
+      eop->name = t->content;
+      expect_op("(");
+      /* Read enumeration name (required) */
+      expect_unknown(tok_string, eop->enumeration_name);
+      if (eop->enumeration_name.empty())
+        throw PARSE_ERROR (_("@enum expected non-empty literal string for first argument"));
+      /* Optional second argument specifies the CU / module to look in */
+      if (peek_op (","))
+        {
+          swallow ();
+          expect_unknown(tok_string, eop->module);
+        }
+      else
+	eop->module = "";
+      expect_op(")");
+      return eop;
+    }
+
+  throw PARSE_ERROR (_("expected @enum"));
+}
 
 // Parse a @defined().  Given head token has already been consumed.
 expression* parser::parse_defined_op (const token* t)
@@ -4189,6 +4224,7 @@ expression* parser::parse_defined_op (const token* t)
 
 
 // Parse a @const().  Given head token has already been consumed.
+// This expands to an embedded_expr so there is no const_op tree type.
 expression* parser::parse_const_op (const token* t)
 {
   if (! privileged)
